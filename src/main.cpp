@@ -21,8 +21,8 @@ int tty_serial = -1;
 
 int main(int argc, char **argv)
 {
+	ros::init(argc, argv, "gpsdriver", ros::init_options::NoSigintHandler);
 	signal(SIGINT, CloseSerialSig);
-	ros::init(argc, argv, "gpsdriver");
 	ros::NodeHandle n;
 	auto gpsPublisher = n.advertise<sensor_msgs::NavSatFix>("/gps/fix", 1000);
 
@@ -42,13 +42,14 @@ int main(int argc, char **argv)
 		{
 			gpsMessage.clear();
 			checksum.clear();
-			ReadGPSData(gpsMessage, checksum);
+			gpsReadSuccess = ReadGPSData(gpsMessage, checksum);
 		}
 
 		auto time = ros::Time::now();
 
 		if (ConfirmChecksum(gpsMessage, checksum))
 		{
+			cout << "Checksum confirmed" << endl;
 			double latitude, longitude, altitude;
 			ParseGPS(gpsMessage, latitude, longitude, altitude);
 
@@ -72,7 +73,6 @@ int main(int argc, char **argv)
 int OpenSerial()
 {
 	int baudrate = 38400;
-	termios laserfd;
 
         int serial_fd = open("/dev/ttyUSB0",O_RDWR|O_NOCTTY);
 
@@ -82,6 +82,7 @@ int OpenSerial()
                 return -1;
         }
 
+	struct termios laserfd;
         memset(&laserfd, 0, sizeof(laserfd));
         laserfd.c_iflag = 0;
         laserfd.c_oflag = 0;
@@ -96,8 +97,9 @@ int OpenSerial()
         cfsetospeed(&laserfd, baudrate);
         tcsetattr(serial_fd, TCSANOW, &laserfd);
 
-	if (tcdrain(serial_fd))
+	if (tcdrain(serial_fd) == 0)
 	{
+		cout << "TC drain succeeded" << endl;
         	return serial_fd;
 	}
 	else
@@ -136,7 +138,7 @@ bool ReadGPSData(string &gpsMessage, string &checksum)
         read(tty_serial, &readValue, 1);
         checksum.push_back(readValue);
 
-	cout << gpsMessage << ": " << checksum << endl;
+	cout << gpsMessage << checksum << endl;
 	return true;
 }
 
@@ -144,19 +146,35 @@ void ParseGPS(const string &gpsMessage, double &latitude, double &longitude, dou
 {
 	vector<string> subStrings;
 	boost::split(subStrings, gpsMessage, boost::is_any_of(","));
-	latitude = stod(subStrings[3]);
-	//todo: convert
-	longitude = stod(subStrings[5]);
+
+	latitude = stod(subStrings[2]);
+	//NOTE: Sticking the -ve in front of the latitude only works in the southern hemisphere.
+	//NMEA data format is DDmm.mmmmm, with D=degrees and m=minutes.
+	//Want to convert to decimal degrees, like DD.DDDDDDDD.
+	//First, move the decimal place to the left to get DD.mmmmmm. Cast to int to get DD.
+	int latitudeDegrees = latitude / 100.0;
+	//Subtract degrees from DD.mmmmm to get 0.mmmmm, then * 100 to get mm.mmm
+	double latitudeDecimalPlaces = (latitude / 100.0 - latitudeDegrees) * 100;
+	//Divide 0.mmmmm by 60 to get it in decimal units. Also make it negative because southern hemisphere.
+	latitude = -(latitudeDegrees + latitudeDecimalPlaces / 60.0);
+
+	longitude = stod(subStrings[4]);
+	int longitudeDegrees = longitude / 100.0;
+	double longitudeDecimalPlaces = (longitude / 100.0 - longitudeDegrees) * 100;
+	longitude = longitudeDegrees + longitudeDecimalPlaces / 60.0;
+
 	altitude = stod(subStrings[9]);
 }
 
 bool ConfirmChecksum(const string &gpsMessage, const string &checksum)
 {
+	cout << "Confirming checksum" << endl;
 	uint8_t calcChecksum = 0x00;
 	//Values we want to include in the checksum are between the $ and the *, non-inclusive
 	for (int i = 1; i < gpsMessage.size() - 1; i++)
 	{
 		calcChecksum ^= gpsMessage[i];
+		cout << gpsMessage[i];
 	}
 
 	static uint8_t _sendsum[2] = {0x00, 0x00};
@@ -174,6 +192,7 @@ bool ConfirmChecksum(const string &gpsMessage, const string &checksum)
 	_sendsum[1] = _sendsum[1] + 0x37;
 	else _sendsum[1] = _sendsum[1] + 0x30;
 
+	cout << endl << "Calculated: " << _sendsum[0] << _sendsum[1] << endl;
 	return checksum[0] == _sendsum[0] && checksum[1] == _sendsum[1];
 }
 
@@ -181,5 +200,6 @@ void CloseSerialSig(int sig)
 {
 	close(tty_serial);
 	cout << "Serial connection closed" << endl;
+	ros::shutdown();
 	exit(EXIT_SUCCESS);
 }
