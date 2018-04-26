@@ -55,7 +55,7 @@ int main(int argc, char **argv)
 
 			sensor_msgs::NavSatFix gpsROSMessage;
 			gpsROSMessage.header.stamp = time;
-			gpsROSMessage.header.frameid = "gps_tf";
+			gpsROSMessage.header.frame_id = "gps_tf";
 			gpsROSMessage.latitude = latitude;
 			gpsROSMessage.longitude = longitude;
 			gpsROSMessage.altitude = altitude;
