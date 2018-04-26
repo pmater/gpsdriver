@@ -1,6 +1,16 @@
 ## Internet access and SSH notes
 (GUI instructions only). Click wifi symbol top right, edit connections, Wired connection 1, IPv4 settings. For internet, set Method to Automatic (DHCP). When you want to use this in the car, set method to manual and add an address 192.168.1.4 with netmask 24. No need for a gateway
 
+## Chrony setup
+First of all, install chrony. Then in /etc/chrony/chrony.conf add the following lines:
+
+server 192.168.1.2
+allow 192.168.1.2
+makestep 0.1 -1
+
+
+Then run "sudo systemctl enable chrony" and reboot
+
 ## ROS setup
 Add the end of .bashrc add:
 
