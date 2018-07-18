@@ -13,7 +13,7 @@ using namespace std;
 
 int OpenSerial();
 bool ReadGPSData(string &gpsMessage, string &checksum);
-void ParseGPS(const string &gpsMessage, double &latitude, double &longitude, double &altitude);
+bool ParseGPS(const string &gpsMessage, double &latitude, double &longitude, double &altitude, int &gpsQuality, int &satellites);
 bool ConfirmChecksum(const string &gpsMessage, const string &checksum);
 void CloseSerialSig(int sig);
 
@@ -51,15 +51,23 @@ int main(int argc, char **argv)
 		{
 			cout << "Checksum confirmed" << endl;
 			double latitude, longitude, altitude;
-			ParseGPS(gpsMessage, latitude, longitude, altitude);
-
-			sensor_msgs::NavSatFix gpsROSMessage;
-			gpsROSMessage.header.stamp = time;
-			gpsROSMessage.header.frame_id = "gps_tf";
-			gpsROSMessage.latitude = latitude;
-			gpsROSMessage.longitude = longitude;
-			gpsROSMessage.altitude = altitude;
-			gpsPublisher.publish(gpsROSMessage);
+			int gpsQuality, satellites;
+			if (ParseGPS(gpsMessage, latitude, longitude, altitude, gpsQuality, satellites))
+			{
+				sensor_msgs::NavSatFix gpsROSMessage;
+				gpsROSMessage.header.stamp = time;
+				gpsROSMessage.header.frame_id = "gps_tf";
+				gpsROSMessage.status.status = gpsQuality;	//NOTE: Putting this data here is not ROS standard.
+				gpsROSMessage.status.service = satellites;	//NOTE: Putting this data here is not ROS standard.
+				gpsROSMessage.latitude = latitude;
+				gpsROSMessage.longitude = longitude;
+				gpsROSMessage.altitude = altitude;
+				gpsPublisher.publish(gpsROSMessage);
+			}
+			else
+			{
+				cout << "Invalid latitude. Quality: " << gpsQuality << ", Satellites: " << satellites << endl;
+			}
 		}
 		else
 		{
@@ -143,28 +151,42 @@ bool ReadGPSData(string &gpsMessage, string &checksum)
 	return true;
 }
 
-void ParseGPS(const string &gpsMessage, double &latitude, double &longitude, double &altitude)
+bool ParseGPS(const string &gpsMessage, double &latitude, double &longitude, double &altitude, int &gpsQuality, int &satellites)
 {
 	vector<string> subStrings;
 	boost::split(subStrings, gpsMessage, boost::is_any_of(","));
+	if (subStrings[2].length() > 0)	//Ensure data isn't empty
+	{
+		latitude = stod(subStrings[2]);
+		//NOTE: Sticking the -ve in front of the latitude only works in the southern hemisphere.
+		//NMEA data format is DDmm.mmmmm, with D=degrees and m=minutes.
+		//Want to convert to decimal degrees, like DD.DDDDDDDD.
+		//First, move the decimal place to the left to get DD.mmmmmm. Cast to int to get DD.
+		int latitudeDegrees = latitude / 100.0;
+		//Subtract degrees from DD.mmmmm to get 0.mmmmm, then * 100 to get mm.mmm
+		double latitudeDecimalPlaces = (latitude / 100.0 - latitudeDegrees) * 100;
+		//Divide 0.mmmmm by 60 to get it in decimal units. Also make it negative because southern hemisphere.
+		latitude = -(latitudeDegrees + latitudeDecimalPlaces / 60.0);
 
-	latitude = stod(subStrings[2]);
-	//NOTE: Sticking the -ve in front of the latitude only works in the southern hemisphere.
-	//NMEA data format is DDmm.mmmmm, with D=degrees and m=minutes.
-	//Want to convert to decimal degrees, like DD.DDDDDDDD.
-	//First, move the decimal place to the left to get DD.mmmmmm. Cast to int to get DD.
-	int latitudeDegrees = latitude / 100.0;
-	//Subtract degrees from DD.mmmmm to get 0.mmmmm, then * 100 to get mm.mmm
-	double latitudeDecimalPlaces = (latitude / 100.0 - latitudeDegrees) * 100;
-	//Divide 0.mmmmm by 60 to get it in decimal units. Also make it negative because southern hemisphere.
-	latitude = -(latitudeDegrees + latitudeDecimalPlaces / 60.0);
+		longitude = stod(subStrings[4]);
+		int longitudeDegrees = longitude / 100.0;
+		double longitudeDecimalPlaces = (longitude / 100.0 - longitudeDegrees) * 100;
+		longitude = longitudeDegrees + longitudeDecimalPlaces / 60.0;
 
-	longitude = stod(subStrings[4]);
-	int longitudeDegrees = longitude / 100.0;
-	double longitudeDecimalPlaces = (longitude / 100.0 - longitudeDegrees) * 100;
-	longitude = longitudeDegrees + longitudeDecimalPlaces / 60.0;
-
-	altitude = stod(subStrings[9]);
+		altitude = stod(subStrings[9]);
+		gpsQuality = stoi(subStrings[6]);
+		satellites = stoi(subStrings[7]);
+		return true;
+	}
+	else
+	{
+		latitude = -1;
+		longitude = -1;
+		altitude = -1;
+		gpsQuality = stoi(subStrings[6]);
+                satellites = stoi(subStrings[7]);
+		return false;
+	}
 }
 
 bool ConfirmChecksum(const string &gpsMessage, const string &checksum)
